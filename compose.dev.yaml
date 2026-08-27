@@ -1,0 +1,35 @@
+# Local development overlay: sources are bind-mounted and both servers reload.
+#
+#   docker compose -f compose.yaml -f compose.dev.yaml up --build
+
+services:
+  db:
+    ports:
+      - "${DB_PORT:-5433}:5432"
+
+  backend:
+    build:
+      target: dev
+    command: ["vibudget", "serve", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    environment:
+      # Ahead of the copy installed in the image, so the mount below is what runs.
+      PYTHONPATH: /app
+      VIBUDGET_DEBUG: "true"
+    volumes:
+      - ./backend/vibudget:/app/vibudget:ro
+      - ./backend/tests:/app/tests:ro
+
+  frontend:
+    build:
+      target: builder
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "4321"]
+    environment:
+      VIBUDGET_API_URL: http://backend:8000
+    volumes:
+      - ./frontend/src:/src/src:ro
+      - ./frontend/astro.config.mjs:/src/astro.config.mjs:ro
+      - ./frontend/tsconfig.json:/src/tsconfig.json:ro
+    ports: !override
+      - "${DEV_WEB_PORT:-4321}:4321"
+    healthcheck:
+      disable: true
