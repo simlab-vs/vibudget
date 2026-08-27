@@ -1,6 +1,7 @@
 import type { Account, CategoryGroup, Payee, Transaction } from "@/lib/types";
 
-const BASE_URL = import.meta.env.VIBUDGET_API_URL ?? "http://127.0.0.1:8000";
+// Same origin: both the Astro dev server and the nginx image proxy /api to the API.
+const BASE_URL = "";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE_URL}/api${path}`, {
