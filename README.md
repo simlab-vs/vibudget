@@ -23,18 +23,50 @@ backend/
     cli.py            `vibudget serve` / `vibudget migrate`
     schemas/          Pydantic models, one module per entity
     api/              One router per entity, mounted under /api
+    repositories/     The SQL behind the endpoints, one module per entity
     migrations/       Numbered .sql files, applied in name order
-  tests/
+  tests/              Schema tests, and endpoint tests against a real database
 frontend/
   Dockerfile          Node build stage, then nginx serving the result
   src/lib/types.ts    TypeScript mirror of the pydantic schemas
   src/lib/api.ts      Typed fetch wrapper over the API
+  src/lib/dom.ts      The small DOM helpers the screens share
+  src/lib/format.ts   Dates, months and amount presentation
   src/layouts/        Shared page shell
-  src/pages/          Routes
+  src/pages/          One screen per route
+  src/styles/app.css  The whole stylesheet
   nginx.conf          Serves the static build, proxies /api to the backend
 compose.yaml          db + backend + frontend, built as images
 compose.dev.yaml      Overlay: bind-mounted sources, both servers reloading
 ```
+
+## Screens
+
+Four routes, each a static page whose script talks to the API from the browser:
+
+| Route           | What it does                                                          |
+| --------------- | --------------------------------------------------------------------- |
+| `/`             | The category tree with each month's activity, and category management |
+| `/accounts`     | Accounts with their balances; add, rename, retype, close, delete       |
+| `/transactions` | The register: filter, record, recategorise, clear, delete             |
+| `/payees`       | Payees with a server-side search; add, rename, delete                  |
+
+Names are edited in place — type in the cell and leave it. Every screen shows
+what the API refused a write with in the banner under its title, so a duplicate
+name or a category still in use explains itself rather than failing silently.
+
+The pages link into each other through the register's filters, which live in the
+URL: `/transactions?account_id=…` and `?category_id=…&since=…&until=…` are what
+the Transactions links on the other screens point at, so those views are
+bookmarkable.
+
+The register records one category per transaction. A transaction split across
+several categories still lists correctly, marked `split × n` with the breakdown
+in its tooltip, but is edited through the API.
+
+Nothing beyond Astro is installed: no UI framework, no client-side router, no
+state library. Each page renders its rows with the handful of helpers in
+`src/lib/dom.ts`.
 
 ## Data model
 
@@ -182,10 +214,44 @@ API calls 404 there; use the Compose stack to see the built site with a live API
 cd backend && .venv/bin/python -m pytest    # tests
 cd backend && .venv/bin/ruff check .        # lint
 cd frontend && npm run check                # Astro + TypeScript check
+cd frontend && npm run build                # also typechecks what the pages import
 ```
+
+The endpoint tests run the real SQL, so they need PostgreSQL. They use the
+sibling database of `DATABASE_URL` — `vibudget_test` for the default — creating
+it on first run and emptying it between tests, so the development data is left
+alone. Without a reachable server they skip and the schema tests still run.
 
 ## Status
 
-The schemas, migrations, routing surface and error handling are in place; every
-endpoint currently raises `NotImplementedError` pending the repository layer.
-Browse the generated contract at `/docs`.
+The four screens above are live against the API, whose SQL lives in
+`backend/vibudget/repositories/`. Browse the generated contract at `/docs`.
+
+Not built yet: editing a split transaction in the browser, assigning money to
+categories (the backend has no budgeted amount, so the budget screen reports
+activity rather than what is left to spend), and pagination past the 100 most
+recent transactions a filter matches.
+
+| Entity         | Endpoints                                                    |
+| -------------- | ------------------------------------------------------------ |
+| `accounts`     | list (`include_closed`), create, read, patch, delete          |
+| `categories`   | list as a tree (`include_hidden`), create, read, patch, delete |
+| `payees`       | list (`search`), create, read, patch, delete                  |
+| `transactions` | list (filters below), create, read, patch, delete             |
+
+Some behaviour worth knowing:
+
+- An account reads back with `balance`, the sum of its transactions, so the
+  accounts screen needs no second call.
+- `GET /api/categories` returns groups with their sub-categories nested under
+  `children`; a sub-category whose group is filtered out goes with it.
+- `GET /api/transactions` filters on `account_id`, `payee_id`, `category_id`,
+  `since` and `until`, newest first, paged with `limit` and `offset`.
+- A `PATCH` only touches the fields present in the body; sending `null`
+  clears one. Sending `splits` replaces them wholesale. Changing `amount` on
+  its own carries a single-category transaction's one split along with it, and
+  is refused for a split transaction, which has to say how the new amount
+  divides up.
+- Integrity is the database's job: uniqueness, foreign keys and the category
+  depth guard come back as `409 conflict`, `422 invalid_reference` or
+  `404 not_found` in the shape defined in `api/errors.py`.
