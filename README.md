@@ -44,26 +44,84 @@ no amount ever passes through a float. Outflows are negative, inflows positive.
   more **splits**. The single-category case is a transaction with exactly one split;
   split amounts always sum to the transaction amount.
 
-## Getting started
+## Requirements
+
+- Python 3.12+ and [uv](https://docs.astral.sh/uv/)
+- Node 20+
+- PostgreSQL 13+ (the schema relies on the built-in `gen_random_uuid()`)
+
+## Running the app
+
+### 1. Database
+
+Either use a local PostgreSQL:
 
 ```bash
-# Database
 createdb vibudget
-cp .env.example .env
-
-# Backend
-cd backend
-uv venv && uv pip install -e ".[dev]"
-.venv/bin/vibudget migrate
-.venv/bin/vibudget serve --reload     # http://127.0.0.1:8000/docs
-
-# Frontend
-cd frontend
-npm install
-npm run dev                            # http://localhost:4321
 ```
 
-Run the tests with `cd backend && .venv/bin/python -m pytest`.
+or run one in Docker:
+
+```bash
+docker run -d --name vibudget-db \
+  -e POSTGRES_USER=vibudget -e POSTGRES_PASSWORD=vibudget -e POSTGRES_DB=vibudget \
+  -p 5432:5432 postgres:17-alpine
+```
+
+### 2. Configuration
+
+Settings are read from the environment; `.env.example` lists every variable with
+its default. Nothing loads `.env` for you, so copy it and export it in the shell
+that runs the backend:
+
+```bash
+cp .env.example .env
+set -a && source .env && set +a
+```
+
+Only `DATABASE_URL` really needs changing — for the Docker container above it is
+`postgresql://vibudget:vibudget@127.0.0.1:5432/vibudget`.
+
+### 3. Backend
+
+```bash
+cd backend
+uv venv
+uv pip install -e ".[dev]"
+.venv/bin/vibudget migrate          # apply backend/vibudget/migrations/*.sql
+.venv/bin/vibudget serve --reload
+```
+
+The API listens on http://127.0.0.1:8000; the generated OpenAPI docs are at
+http://127.0.0.1:8000/docs and `GET /health` should answer `{"status": "ok"}`.
+
+`vibudget serve` also accepts `--host` and `--port`. Migrations are applied on
+startup as well unless `VIBUDGET_MIGRATE_ON_STARTUP=false`, so the explicit
+`vibudget migrate` step is mostly useful for setting the database up on its own.
+
+### 4. Frontend
+
+In a second terminal, with the backend running:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The site is served at http://localhost:4321. The dev server proxies `/api` to
+`VIBUDGET_API_URL` (default http://127.0.0.1:8000).
+
+For a production build, `npm run build` writes static files to `frontend/dist/`
+and `npm run preview` serves them.
+
+## Development
+
+```bash
+cd backend && .venv/bin/python -m pytest    # tests
+cd backend && .venv/bin/ruff check .        # lint
+cd frontend && npm run check                # Astro + TypeScript check
+```
 
 ## Status
 
