@@ -1,0 +1,180 @@
+---
+import Base from "@/layouts/Base.astro";
+---
+
+<Base title="Accounts">
+  <form class="card" id="new-account">
+    <h2>Add an account</h2>
+    <div class="fields">
+      <label class="field wide">
+        Name
+        <input name="name" required maxlength="100" placeholder="Checking" />
+      </label>
+      <label class="field">
+        Type
+        <select name="type">
+          <option value="cash">Cash</option>
+          <option value="credit">Credit</option>
+        </select>
+      </label>
+      <label class="field check">
+        <input type="checkbox" name="on_budget" checked />
+        On budget
+      </label>
+      <div class="field">
+        <button class="primary" type="submit">Add account</button>
+      </div>
+    </div>
+  </form>
+
+  <div class="toolbar">
+    <label><input type="checkbox" id="include-closed" /> Show closed accounts</label>
+  </div>
+
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Budget</th>
+          <th class="numeric">Balance</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+      <tfoot>
+        <tr>
+          <td colspan="3">On-budget total</td>
+          <td class="numeric" id="total"></td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <script>
+    import { api } from "@/lib/api";
+    import { attempt, el, element, fields, replace, resetStatus, row } from "@/lib/dom";
+    import { amountTone } from "@/lib/format";
+    import { formatMilliunits } from "@/lib/types";
+    import type { Account, AccountType, AccountUpdate } from "@/lib/types";
+
+    const form = element<HTMLFormElement>("#new-account");
+    const includeClosed = element<HTMLInputElement>("#include-closed");
+    const rows = element<HTMLTableSectionElement>("#rows");
+    const total = element("#total");
+
+    async function load(): Promise<void> {
+      const accounts = await attempt(() =>
+        api.accounts.list({ include_closed: includeClosed.checked }),
+      );
+      if (!accounts) return;
+
+      replace(rows, ...(accounts.length ? accounts.map(render) : [row(5, "No account yet.")]));
+      const budgeted = accounts
+        .filter((account) => account.on_budget && !account.closed)
+        .reduce((sum, account) => sum + account.balance, 0);
+      total.textContent = formatMilliunits(budgeted);
+    }
+
+    async function patch(id: string, payload: AccountUpdate): Promise<void> {
+      resetStatus();
+      await attempt(() => api.accounts.update(id, payload));
+      await load();
+    }
+
+    function render(account: Account): HTMLTableRowElement {
+      const name = el("input", {
+        class: "cell-input",
+        value: account.name,
+        "aria-label": "Account name",
+        onchange: (event: Event) =>
+          void patch(account.id, { name: (event.target as HTMLInputElement).value.trim() }),
+      });
+
+      const type = el(
+        "select",
+        {
+          "aria-label": "Account type",
+          onchange: (event: Event) =>
+            void patch(account.id, {
+              type: (event.target as HTMLSelectElement).value as AccountType,
+            }),
+        },
+        el("option", { value: "cash", selected: account.type === "cash" }, "Cash"),
+        el("option", { value: "credit", selected: account.type === "credit" }, "Credit"),
+      );
+
+      return el(
+        "tr",
+        {},
+        el("td", {}, name, account.closed ? el("span", { class: "pill" }, "closed") : null),
+        el("td", {}, type),
+        el("td", {}, el("span", { class: "pill" }, account.on_budget ? "on budget" : "off budget")),
+        el(
+          "td",
+          { class: `numeric amount ${amountTone(account.balance)}` },
+          formatMilliunits(account.balance),
+        ),
+        el(
+          "td",
+          {},
+          el(
+            "div",
+            { class: "actions" },
+            el(
+              "a",
+              { class: "inline", href: `/transactions?account_id=${account.id}` },
+              "Transactions",
+            ),
+            el(
+              "button",
+              {
+                class: "link",
+                type: "button",
+                onclick: () => void patch(account.id, { closed: !account.closed }),
+              },
+              account.closed ? "Reopen" : "Close",
+            ),
+            el(
+              "button",
+              { class: "link danger", type: "button", onclick: () => void remove(account) },
+              "Delete",
+            ),
+          ),
+        ),
+      );
+    }
+
+    async function remove(account: Account): Promise<void> {
+      const warning = `Delete ${account.name}? Its transactions are deleted with it.`;
+      if (!window.confirm(warning)) return;
+      resetStatus();
+      await attempt(() => api.accounts.remove(account.id));
+      await load();
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      resetStatus();
+      const field = fields(form);
+      const created = await attempt(() =>
+        api.accounts.create({
+          name: field("name"),
+          type: field("type") as AccountType,
+          on_budget: field("on_budget") === "on",
+        }),
+      );
+      if (created) form.reset();
+      await load();
+    });
+
+    includeClosed.addEventListener("change", () => {
+      resetStatus();
+      void load();
+    });
+
+    void load();
+  </script>
+</Base>

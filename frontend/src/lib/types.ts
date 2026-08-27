@@ -28,6 +28,21 @@ export interface Account {
   updated_at: IsoDateTime;
 }
 
+export interface AccountCreate {
+  name: string;
+  type: AccountType;
+  on_budget?: boolean;
+  note?: string | null;
+}
+
+export interface AccountUpdate {
+  name?: string;
+  type?: AccountType;
+  on_budget?: boolean;
+  closed?: boolean;
+  note?: string | null;
+}
+
 export interface Category {
   id: UUID;
   parent_id: UUID | null;
@@ -42,6 +57,19 @@ export interface CategoryGroup extends Category {
   children: Category[];
 }
 
+export interface CategoryCreate {
+  name: string;
+  parent_id?: UUID | null;
+  note?: string | null;
+}
+
+export interface CategoryUpdate {
+  name?: string;
+  parent_id?: UUID | null;
+  hidden?: boolean;
+  note?: string | null;
+}
+
 export interface Payee {
   id: UUID;
   name: string;
@@ -49,11 +77,25 @@ export interface Payee {
   updated_at: IsoDateTime;
 }
 
+export interface PayeeCreate {
+  name: string;
+}
+
+export interface PayeeUpdate {
+  name?: string;
+}
+
 export interface Split {
   id: UUID;
   category_id: UUID;
   amount: number;
   memo: string | null;
+}
+
+export interface SplitCreate {
+  category_id: UUID;
+  amount: number;
+  memo?: string | null;
 }
 
 export interface Transaction {
@@ -69,8 +111,43 @@ export interface Transaction {
   updated_at: IsoDateTime;
 }
 
+export interface TransactionCreate {
+  account_id: UUID;
+  date: IsoDate;
+  amount: number;
+  payee_id?: UUID | null;
+  memo?: string | null;
+  cleared?: ClearedStatus;
+  splits: SplitCreate[];
+}
+
+/** Sending `splits` requires sending `amount` too, so the two can be checked. */
+export interface TransactionUpdate {
+  account_id?: UUID;
+  date?: IsoDate;
+  amount?: number;
+  payee_id?: UUID | null;
+  memo?: string | null;
+  cleared?: ClearedStatus;
+  splits?: SplitCreate[];
+}
+
+export type TransactionQuery = {
+  account_id?: UUID;
+  payee_id?: UUID;
+  category_id?: UUID;
+  since?: IsoDate;
+  until?: IsoDate;
+  limit?: number;
+  offset?: number;
+};
+
 export function formatMilliunits(amount: number, currency = "USD", locale = "en-US"): string {
   return new Intl.NumberFormat(locale, { style: "currency", currency }).format(
     amount / MILLIUNITS_PER_UNIT,
   );
+}
+
+export function toMilliunits(amount: number): number {
+  return Math.round(amount * MILLIUNITS_PER_UNIT);
 }
