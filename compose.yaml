@@ -1,0 +1,49 @@
+name: vibudget
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vibudget}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vibudget}
+      POSTGRES_DB: ${POSTGRES_DB:-vibudget}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    # Not published: only the backend talks to it, over the compose network.
+    # The dev overlay exposes it on DB_PORT for psql.
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vibudget} -d ${POSTGRES_DB:-vibudget}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-vibudget}:${POSTGRES_PASSWORD:-vibudget}@db:5432/${POSTGRES_DB:-vibudget}
+      DB_POOL_MIN_SIZE: ${DB_POOL_MIN_SIZE:-1}
+      DB_POOL_MAX_SIZE: ${DB_POOL_MAX_SIZE:-10}
+      VIBUDGET_MIGRATE_ON_STARTUP: ${VIBUDGET_MIGRATE_ON_STARTUP:-true}
+      VIBUDGET_DEBUG: ${VIBUDGET_DEBUG:-false}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    restart: unless-stopped
+
+volumes:
+  db-data:
