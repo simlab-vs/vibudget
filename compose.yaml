@@ -35,12 +35,25 @@ services:
       - "${BACKEND_PORT:-8000}:8000"
     restart: unless-stopped
 
+  seed:
+    image: postgres:17-alpine
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-vibudget}
+    volumes:
+      - ./scripts/seed_demo.sql:/seed_demo.sql:ro
+    command:
+      ["psql", "-v", "ON_ERROR_STOP=1", "-h", "db", "-U", "${POSTGRES_USER:-vibudget}", "-d", "${POSTGRES_DB:-vibudget}", "-f", "/seed_demo.sql"]
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: "no"
+
   frontend:
     build:
       context: ./frontend
     depends_on:
-      backend:
-        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
     ports:
       - "${WEB_PORT:-8080}:80"
     restart: unless-stopped

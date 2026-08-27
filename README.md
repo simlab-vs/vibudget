@@ -84,18 +84,23 @@ no amount ever passes through a float. Outflows are negative, inflows positive.
 
 ## Running with Docker Compose
 
-The quickest way to get the whole stack up, and the shape a deployment takes.
-Only Docker is needed — no local Python, Node or PostgreSQL.
+The quickest way to get the demo running. Only Docker is needed — no local
+Python, Node or PostgreSQL.
 
 ```bash
 cp .env.example .env      # optional; every variable has a default
 docker compose up --build
 ```
 
-Three services come up: `db` (PostgreSQL 17), `backend` (the API) and
-`frontend` (the static build behind nginx). Compose waits for the database to
-pass its health check before starting the API, which applies the migrations on
-startup.
+That is the complete participant setup. On its first launch, Compose starts
+PostgreSQL, applies the migrations, loads the realistic two-year demo budget,
+and then starts the site. No database command or import is needed. Subsequent
+launches keep the existing budget and skip the seed step.
+
+The stack has `db` (PostgreSQL 17), `backend` (the API), a one-off `seed` job,
+and `frontend` (the static build behind nginx). Compose waits for the database
+to pass its health check before starting the API; the frontend waits for the
+seed job to finish.
 
 The site is served at http://localhost:8080. nginx proxies `/api`, `/health`,
 `/docs` and `/openapi.json` to the backend on the same origin, so the browser
@@ -108,6 +113,17 @@ section. The database port is deliberately not published — only the backend
 talks to it, over the compose network — so the stack cannot collide with a
 PostgreSQL already running on the host. The data lives in the `db-data` volume
 and survives `docker compose down`; add `-v` to discard it.
+
+To reset the demo to its original data, deliberately discard the database
+volume and launch it again:
+
+```bash
+docker compose down -v
+docker compose up --build
+```
+
+`down -v` permanently removes the budget, so do not use it for data you want
+to keep.
 
 ### Local development in containers
 
