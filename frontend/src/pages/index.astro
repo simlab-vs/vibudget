@@ -3,9 +3,205 @@ import Base from "@/layouts/Base.astro";
 ---
 
 <Base title="Budget">
-  <p>
-    The budget view lands once the repository layer and the category endpoints are
-    implemented. The data model it will render is defined in
-    <code>backend/vibudget/schemas</code> and <code>src/lib/types.ts</code>.
-  </p>
+  <form class="card" id="new-category">
+    <h2>Add a category</h2>
+    <div class="fields">
+      <label class="field wide">
+        Name
+        <input name="name" required maxlength="100" placeholder="Groceries" />
+      </label>
+      <label class="field">
+        Group
+        <select name="parent_id" id="parent"></select>
+      </label>
+      <div class="field">
+        <button class="primary" type="submit">Add category</button>
+      </div>
+    </div>
+    <p class="hint">
+      Categories are two levels deep: leave the group empty to create a group, pick one to create
+      a sub-category. Only sub-categories can be assigned to a transaction.
+    </p>
+  </form>
+
+  <div class="toolbar">
+    <label>
+      Month
+      <input type="month" id="month" />
+    </label>
+    <label><input type="checkbox" id="include-hidden" /> Show hidden categories</label>
+    <span class="muted" id="summary"></span>
+  </div>
+
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th class="numeric">Activity</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+      <tfoot>
+        <tr>
+          <td>Net for the month</td>
+          <td class="numeric" id="net"></td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <script>
+    import { api } from "@/lib/api";
+    import { attempt, el, element, fields, fillSelect, replace, resetStatus, row } from "@/lib/dom";
+    import { amountTone, currentMonth, formatMonth, monthBounds } from "@/lib/format";
+    import { formatMilliunits } from "@/lib/types";
+    import type { Category, CategoryGroup, CategoryUpdate } from "@/lib/types";
+
+    const form = element<HTMLFormElement>("#new-category");
+    const month = element<HTMLInputElement>("#month");
+    const includeHidden = element<HTMLInputElement>("#include-hidden");
+    const rows = element<HTMLTableSectionElement>("#rows");
+    const summary = element("#summary");
+    const net = element("#net");
+
+    async function load(): Promise<void> {
+      const { since, until } = monthBounds(month.value);
+      const data = await attempt(async () => ({
+        groups: await api.categories.list({ include_hidden: includeHidden.checked }),
+        transactions: await api.transactions.list({ since, until, limit: 1000 }),
+      }));
+      if (!data) return;
+
+      const activity = new Map<string, number>();
+      for (const transaction of data.transactions) {
+        for (const split of transaction.splits) {
+          activity.set(split.category_id, (activity.get(split.category_id) ?? 0) + split.amount);
+        }
+      }
+
+      fillSelect(
+        element<HTMLSelectElement>("#parent"),
+        data.groups.map((group) => ({ value: group.id, label: group.name })),
+        "None — a new group",
+      );
+
+      const body = data.groups.flatMap((group) => [
+        render(group, subtotal(group, activity), true, since, until),
+        ...group.children.map((child) =>
+          render(child, activity.get(child.id) ?? 0, false, since, until),
+        ),
+      ]);
+      replace(rows, ...(body.length ? body : [row(3, "No category yet.")]));
+
+      const inflow = data.transactions
+        .filter((transaction) => transaction.amount > 0)
+        .reduce((sum, transaction) => sum + transaction.amount, 0);
+      const outflow = data.transactions
+        .filter((transaction) => transaction.amount < 0)
+        .reduce((sum, transaction) => sum + transaction.amount, 0);
+      summary.textContent = `${formatMonth(month.value)}: ${formatMilliunits(
+        inflow,
+      )} in, ${formatMilliunits(outflow)} out`;
+      net.textContent = formatMilliunits(inflow + outflow);
+    }
+
+    function subtotal(group: CategoryGroup, activity: Map<string, number>): number {
+      return group.children.reduce((sum, child) => sum + (activity.get(child.id) ?? 0), 0);
+    }
+
+    function render(
+      category: Category,
+      amount: number,
+      isGroup: boolean,
+      since: string,
+      until: string,
+    ): HTMLTableRowElement {
+      const name = el("input", {
+        class: "cell-input",
+        value: category.name,
+        "aria-label": "Category name",
+        onchange: (event: Event) =>
+          void patch(category.id, { name: (event.target as HTMLInputElement).value.trim() }),
+      });
+
+      const link = `/transactions?category_id=${category.id}&since=${since}&until=${until}`;
+
+      return el(
+        "tr",
+        { class: isGroup ? "group-row" : undefined },
+        el(
+          "td",
+          { class: isGroup ? undefined : "child-name" },
+          name,
+          category.hidden ? el("span", { class: "pill" }, "hidden") : null,
+        ),
+        el(
+          "td",
+          { class: `numeric amount ${amountTone(amount)}` },
+          formatMilliunits(amount),
+        ),
+        el(
+          "td",
+          {},
+          el(
+            "div",
+            { class: "actions" },
+            isGroup ? null : el("a", { class: "inline", href: link }, "Transactions"),
+            el(
+              "button",
+              {
+                class: "link",
+                type: "button",
+                onclick: () => void patch(category.id, { hidden: !category.hidden }),
+              },
+              category.hidden ? "Unhide" : "Hide",
+            ),
+            el(
+              "button",
+              { class: "link danger", type: "button", onclick: () => void remove(category) },
+              "Delete",
+            ),
+          ),
+        ),
+      );
+    }
+
+    async function patch(id: string, payload: CategoryUpdate): Promise<void> {
+      resetStatus();
+      await attempt(() => api.categories.update(id, payload));
+      await load();
+    }
+
+    async function remove(category: Category): Promise<void> {
+      if (!window.confirm(`Delete ${category.name}?`)) return;
+      resetStatus();
+      await attempt(() => api.categories.remove(category.id));
+      await load();
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      resetStatus();
+      const field = fields(form);
+      const created = await attempt(() =>
+        api.categories.create({ name: field("name"), parent_id: field("parent_id") || null }),
+      );
+      if (created) form.reset();
+      await load();
+    });
+
+    const refresh = () => {
+      resetStatus();
+      void load();
+    };
+
+    month.addEventListener("change", refresh);
+    includeHidden.addEventListener("change", refresh);
+
+    month.value = currentMonth();
+    void load();
+  </script>
 </Base>

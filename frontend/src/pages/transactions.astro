@@ -1,0 +1,372 @@
+---
+import Base from "@/layouts/Base.astro";
+---
+
+<Base title="Transactions">
+  <form class="card" id="new-transaction">
+    <h2>Record a transaction</h2>
+    <div class="fields">
+      <label class="field">
+        Account
+        <select name="account_id" id="new-account" required></select>
+      </label>
+      <label class="field">
+        Date
+        <input type="date" name="date" id="new-date" required />
+      </label>
+      <label class="field">
+        Payee
+        <select name="payee_id" id="new-payee"></select>
+      </label>
+      <label class="field">
+        Category
+        <select name="category_id" id="new-category" required></select>
+      </label>
+      <label class="field">
+        Direction
+        <select name="direction">
+          <option value="outflow">Outflow</option>
+          <option value="inflow">Inflow</option>
+        </select>
+      </label>
+      <label class="field">
+        Amount
+        <input type="number" name="amount" min="0" step="0.01" placeholder="0.00" required />
+      </label>
+      <label class="field wide">
+        Memo
+        <input name="memo" maxlength="500" placeholder="Optional" />
+      </label>
+      <label class="field">
+        Status
+        <select name="cleared">
+          <option value="uncleared">Uncleared</option>
+          <option value="cleared">Cleared</option>
+          <option value="reconciled">Reconciled</option>
+        </select>
+      </label>
+      <div class="field">
+        <button class="primary" type="submit">Add transaction</button>
+      </div>
+    </div>
+    <p class="hint">
+      Records one category per transaction; a transaction split across several categories shows
+      here as a split but is edited through the API.
+    </p>
+  </form>
+
+  <form class="card" id="filters">
+    <h2>Filter</h2>
+    <div class="fields">
+      <label class="field">
+        Account
+        <select name="account_id" id="filter-account"></select>
+      </label>
+      <label class="field">
+        Payee
+        <select name="payee_id" id="filter-payee"></select>
+      </label>
+      <label class="field">
+        Category
+        <select name="category_id" id="filter-category"></select>
+      </label>
+      <label class="field">
+        From
+        <input type="date" name="since" />
+      </label>
+      <label class="field">
+        To
+        <input type="date" name="until" />
+      </label>
+      <div class="field">
+        <button type="reset">Clear filters</button>
+      </div>
+    </div>
+  </form>
+
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Account</th>
+          <th>Payee</th>
+          <th>Category</th>
+          <th>Memo</th>
+          <th>Status</th>
+          <th class="numeric">Amount</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+      <tfoot>
+        <tr>
+          <td colspan="6" id="count"></td>
+          <td class="numeric" id="total"></td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <p class="hint" id="hint" hidden></p>
+
+  <script>
+    import { api } from "@/lib/api";
+    import { attempt, el, element, fields, fillSelect, replace, resetStatus, row } from "@/lib/dom";
+    import type { Option } from "@/lib/dom";
+    import { amountTone, formatDate, today } from "@/lib/format";
+    import { formatMilliunits, toMilliunits } from "@/lib/types";
+    import type {
+      Account,
+      ClearedStatus,
+      Payee,
+      Transaction,
+      TransactionQuery,
+    } from "@/lib/types";
+
+    const LIMIT = 100;
+    const STATUSES: ClearedStatus[] = ["uncleared", "cleared", "reconciled"];
+
+    const form = element<HTMLFormElement>("#new-transaction");
+    const filters = element<HTMLFormElement>("#filters");
+    const rows = element<HTMLTableSectionElement>("#rows");
+    const count = element("#count");
+    const total = element("#total");
+    const hint = element("#hint");
+
+    const accountNames = new Map<string, string>();
+    const payeeNames = new Map<string, string>();
+    const categoryNames = new Map<string, string>();
+    let categoryOptions: Option[] = [];
+
+    async function loadLookups(): Promise<void> {
+      const data = await attempt(async () => ({
+        accounts: await api.accounts.list({ include_closed: true }),
+        payees: await api.payees.list(),
+        groups: await api.categories.list(),
+      }));
+      if (!data) return;
+
+      accountNames.clear();
+      payeeNames.clear();
+      categoryNames.clear();
+      for (const account of data.accounts) accountNames.set(account.id, account.name);
+      for (const payee of data.payees) payeeNames.set(payee.id, payee.name);
+      categoryOptions = data.groups.flatMap((group) =>
+        group.children.map((child) => {
+          categoryNames.set(child.id, `${group.name}: ${child.name}`);
+          return { value: child.id, label: child.name, group: group.name };
+        }),
+      );
+
+      const open = data.accounts.filter((account: Account) => !account.closed);
+      const payeeOptions = data.payees.map((payee: Payee) => ({
+        value: payee.id,
+        label: payee.name,
+      }));
+      const accountOptions = (list: Account[]) =>
+        list.map((account) => ({ value: account.id, label: account.name }));
+
+      fillSelect(element<HTMLSelectElement>("#new-account"), accountOptions(open), "Choose one");
+      fillSelect(element<HTMLSelectElement>("#new-payee"), payeeOptions, "No payee");
+      fillSelect(element<HTMLSelectElement>("#new-category"), categoryOptions, "Choose one");
+      fillSelect(
+        element<HTMLSelectElement>("#filter-account"),
+        accountOptions(data.accounts),
+        "Any account",
+      );
+      fillSelect(element<HTMLSelectElement>("#filter-payee"), payeeOptions, "Any payee");
+      fillSelect(element<HTMLSelectElement>("#filter-category"), categoryOptions, "Any category");
+    }
+
+    function currentQuery(): TransactionQuery {
+      const field = fields(filters);
+      const query: TransactionQuery = { limit: LIMIT };
+      for (const name of ["account_id", "payee_id", "category_id", "since", "until"] as const) {
+        const value = field(name);
+        if (value) query[name] = value;
+      }
+      return query;
+    }
+
+    function rememberQuery(query: TransactionQuery): void {
+      const search = new URLSearchParams();
+      for (const [name, value] of Object.entries(query)) {
+        if (name !== "limit" && value) search.set(name, String(value));
+      }
+      const encoded = search.toString();
+      history.replaceState(null, "", encoded ? `?${encoded}` : window.location.pathname);
+    }
+
+    function restoreQuery(): void {
+      const search = new URLSearchParams(window.location.search);
+      for (const [name, value] of search) {
+        const field = filters.elements.namedItem(name);
+        if (field instanceof HTMLSelectElement || field instanceof HTMLInputElement) {
+          field.value = value;
+        }
+      }
+    }
+
+    async function load(): Promise<void> {
+      const query = currentQuery();
+      rememberQuery(query);
+
+      const transactions = await attempt(() => api.transactions.list(query));
+      if (!transactions) return;
+
+      replace(
+        rows,
+        ...(transactions.length ? transactions.map(render) : [row(8, "No transaction matches.")]),
+      );
+      count.textContent = `${transactions.length} transaction${
+        transactions.length === 1 ? "" : "s"
+      }`;
+      total.textContent = formatMilliunits(
+        transactions.reduce((sum, transaction) => sum + transaction.amount, 0),
+      );
+      hint.hidden = transactions.length < LIMIT;
+      hint.textContent = `Showing the ${LIMIT} most recent matches; narrow the filters to see more.`;
+    }
+
+    function categoryCell(transaction: Transaction): HTMLTableCellElement {
+      if (transaction.splits.length !== 1) {
+        const detail = transaction.splits
+          .map((split) => `${categoryNames.get(split.category_id) ?? "?"} ${formatMilliunits(split.amount)}`)
+          .join("\n");
+        return el("td", { title: detail }, el("span", { class: "pill" }, `split × ${transaction.splits.length}`));
+      }
+
+      const split = transaction.splits[0];
+      const select = el("select", {
+        "aria-label": "Category",
+        onchange: (event: Event) =>
+          void patch(transaction.id, {
+            amount: transaction.amount,
+            splits: [
+              {
+                category_id: (event.target as HTMLSelectElement).value,
+                amount: transaction.amount,
+                memo: split.memo,
+              },
+            ],
+          }),
+      });
+      fillSelect(select, categoryOptions);
+      select.value = split.category_id;
+      return el("td", {}, select);
+    }
+
+    function render(transaction: Transaction): HTMLTableRowElement {
+      const status = el(
+        "select",
+        {
+          "aria-label": "Cleared status",
+          onchange: (event: Event) =>
+            void patch(transaction.id, {
+              cleared: (event.target as HTMLSelectElement).value as ClearedStatus,
+            }),
+        },
+        ...STATUSES.map((value) =>
+          el("option", { value, selected: transaction.cleared === value }, value),
+        ),
+      );
+
+      return el(
+        "tr",
+        {},
+        el("td", {}, formatDate(transaction.date)),
+        el("td", {}, accountNames.get(transaction.account_id) ?? "—"),
+        el(
+          "td",
+          {},
+          transaction.payee_id
+            ? (payeeNames.get(transaction.payee_id) ?? "—")
+            : el("span", { class: "muted" }, "—"),
+        ),
+        categoryCell(transaction),
+        el("td", { class: "muted" }, transaction.memo ?? ""),
+        el("td", {}, status),
+        el(
+          "td",
+          { class: `numeric amount ${amountTone(transaction.amount)}` },
+          formatMilliunits(transaction.amount),
+        ),
+        el(
+          "td",
+          {},
+          el(
+            "div",
+            { class: "actions" },
+            el(
+              "button",
+              { class: "link danger", type: "button", onclick: () => void remove(transaction) },
+              "Delete",
+            ),
+          ),
+        ),
+      );
+    }
+
+    async function patch(id: string, payload: Parameters<typeof api.transactions.update>[1]) {
+      resetStatus();
+      await attempt(() => api.transactions.update(id, payload));
+      await load();
+    }
+
+    async function remove(transaction: Transaction): Promise<void> {
+      if (!window.confirm(`Delete the transaction of ${formatMilliunits(transaction.amount)}?`)) {
+        return;
+      }
+      resetStatus();
+      await attempt(() => api.transactions.remove(transaction.id));
+      await load();
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      resetStatus();
+      const field = fields(form);
+      const magnitude = toMilliunits(Number(field("amount")));
+      const amount = field("direction") === "inflow" ? magnitude : -magnitude;
+      const memo = field("memo");
+
+      const created = await attempt(() =>
+        api.transactions.create({
+          account_id: field("account_id"),
+          date: field("date"),
+          amount,
+          payee_id: field("payee_id") || null,
+          memo: memo || null,
+          cleared: field("cleared") as ClearedStatus,
+          splits: [{ category_id: field("category_id"), amount }],
+        }),
+      );
+
+      if (created) {
+        const date = field("date");
+        form.reset();
+        element<HTMLInputElement>("#new-date").value = date;
+      }
+      await load();
+    });
+
+    filters.addEventListener("change", () => {
+      resetStatus();
+      void load();
+    });
+    filters.addEventListener("reset", () =>
+      window.setTimeout(() => {
+        resetStatus();
+        void load();
+      }),
+    );
+
+    element<HTMLInputElement>("#new-date").value = today();
+    void loadLookups().then(() => {
+      restoreQuery();
+      return load();
+    });
+  </script>
+</Base>

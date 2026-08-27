@@ -1,4 +1,6 @@
 ---
+import "@/styles/app.css";
+
 interface Props {
   title: string;
 }
@@ -34,65 +36,8 @@ const sections = [
     </header>
     <main>
       <h1>{title}</h1>
+      <p class="banner" id="status" hidden></p>
       <slot />
     </main>
-
-    <style>
-      :root {
-        --ink: #16302b;
-        --muted: #6b7f7a;
-        --line: #d9e2df;
-        --bg: #fbfcfc;
-      }
-
-      body {
-        margin: 0;
-        background: var(--bg);
-        color: var(--ink);
-        font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
-      }
-
-      header {
-        display: flex;
-        align-items: baseline;
-        gap: 2rem;
-        padding: 1rem 1.5rem;
-        border-bottom: 1px solid var(--line);
-      }
-
-      .wordmark {
-        font-weight: 650;
-        letter-spacing: -0.01em;
-        text-decoration: none;
-        color: var(--ink);
-      }
-
-      nav {
-        display: flex;
-        gap: 1.25rem;
-      }
-
-      nav a {
-        color: var(--muted);
-        text-decoration: none;
-      }
-
-      nav a[aria-current="page"] {
-        color: var(--ink);
-        font-weight: 550;
-      }
-
-      main {
-        max-width: 60rem;
-        margin: 0 auto;
-        padding: 2rem 1.5rem;
-      }
-
-      h1 {
-        font-size: 1.5rem;
-        letter-spacing: -0.015em;
-        margin: 0 0 1.5rem;
-      }
-    </style>
   </body>
 </html>

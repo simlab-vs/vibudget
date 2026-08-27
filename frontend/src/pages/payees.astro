@@ -1,0 +1,121 @@
+---
+import Base from "@/layouts/Base.astro";
+---
+
+<Base title="Payees">
+  <form class="card" id="new-payee">
+    <h2>Add a payee</h2>
+    <div class="fields">
+      <label class="field wide">
+        Name
+        <input name="name" required maxlength="100" placeholder="Corner Grocery" />
+      </label>
+      <div class="field">
+        <button class="primary" type="submit">Add payee</button>
+      </div>
+    </div>
+  </form>
+
+  <div class="toolbar">
+    <label>
+      Search
+      <input id="search" type="search" placeholder="Part of a name" />
+    </label>
+    <span class="muted" id="count"></span>
+  </div>
+
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <p class="hint">
+    A payee named by a transaction cannot be deleted; reassign those transactions first.
+  </p>
+
+  <script>
+    import { api } from "@/lib/api";
+    import { attempt, el, element, fields, replace, resetStatus, row } from "@/lib/dom";
+    import type { Payee } from "@/lib/types";
+
+    const form = element<HTMLFormElement>("#new-payee");
+    const search = element<HTMLInputElement>("#search");
+    const rows = element<HTMLTableSectionElement>("#rows");
+    const count = element("#count");
+
+    async function load(): Promise<void> {
+      const payees = await attempt(() => api.payees.list({ search: search.value.trim() }));
+      if (!payees) return;
+
+      replace(rows, ...(payees.length ? payees.map(render) : [row(2, "No payee matches.")]));
+      count.textContent = `${payees.length} payee${payees.length === 1 ? "" : "s"}`;
+    }
+
+    function render(payee: Payee): HTMLTableRowElement {
+      const name = el("input", {
+        class: "cell-input",
+        value: payee.name,
+        "aria-label": "Payee name",
+        onchange: (event: Event) =>
+          void rename(payee.id, (event.target as HTMLInputElement).value.trim()),
+      });
+
+      return el(
+        "tr",
+        {},
+        el("td", {}, name),
+        el(
+          "td",
+          {},
+          el(
+            "div",
+            { class: "actions" },
+            el("a", { class: "inline", href: `/transactions?payee_id=${payee.id}` }, "Transactions"),
+            el(
+              "button",
+              { class: "link danger", type: "button", onclick: () => void remove(payee) },
+              "Delete",
+            ),
+          ),
+        ),
+      );
+    }
+
+    async function rename(id: string, name: string): Promise<void> {
+      resetStatus();
+      await attempt(() => api.payees.update(id, { name }));
+      await load();
+    }
+
+    async function remove(payee: Payee): Promise<void> {
+      if (!window.confirm(`Delete ${payee.name}?`)) return;
+      resetStatus();
+      await attempt(() => api.payees.remove(payee.id));
+      await load();
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      resetStatus();
+      const field = fields(form);
+      const created = await attempt(() => api.payees.create({ name: field("name") }));
+      if (created) form.reset();
+      await load();
+    });
+
+    let pending: number | undefined;
+    search.addEventListener("input", () => {
+      window.clearTimeout(pending);
+      pending = window.setTimeout(() => void load(), 200);
+    });
+
+    void load();
+  </script>
+</Base>
