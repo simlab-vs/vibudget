@@ -43,13 +43,15 @@ compose.dev.yaml      Overlay: bind-mounted sources, both servers reloading
 
 ## Screens
 
-Four routes, each a static page whose script talks to the API from the browser:
+Six routes, each a static page whose script talks to the API from the browser:
 
 | Route           | What it does                                                          |
 | --------------- | --------------------------------------------------------------------- |
+| `/dashboard`    | Net worth, cashflow, spending by category, and what is due — one read  |
 | `/`             | The category tree with each month's activity, and category management |
 | `/accounts`     | Accounts with their balances; add, rename, retype, close, delete       |
 | `/transactions` | The register: filter, record, recategorise, clear, delete             |
+| `/scheduled`    | The approval queue for scheduled transactions, and the rules behind it |
 | `/payees`       | Payees with a server-side search; add, rename, delete                  |
 
 Names are edited in place — type in the cell and leave it. Every screen shows
@@ -64,6 +66,9 @@ bookmarkable.
 The register records one category per transaction. A transaction split across
 several categories still lists correctly, marked `split × n` with the breakdown
 in its tooltip, but is edited through the API.
+
+A transaction entered by approving a scheduled occurrence carries a `scheduled`
+badge in the register, linking back to `/scheduled`.
 
 Nothing beyond Astro is installed: no UI framework, no client-side router, no
 state library. Each page renders its rows with the handful of helpers in
@@ -241,13 +246,17 @@ alone. Without a reachable server they skip and the schema tests still run.
 
 ## Status
 
-The four screens above are live against the API, whose SQL lives in
+The first four screens are live against the API, whose SQL lives in
 `backend/vibudget/repositories/`. Browse the generated contract at `/docs`.
+`/scheduled` and `/dashboard` are built and waiting on their endpoints
+(`/api/schedules`, `/api/dashboard`), which land with the spec below; until
+then they load with an error banner.
 
-Not built yet: editing a split transaction in the browser, assigning money to
-categories (the backend has no budgeted amount, so the budget screen reports
-activity rather than what is left to spend), and pagination past the 100 most
-recent transactions a filter matches.
+Not built yet: editing a split transaction or a split schedule in the browser,
+approving an occurrence from the dashboard (it links to `/scheduled` by
+design), assigning money to categories (the backend has no budgeted amount, so
+the budget screen reports activity rather than what is left to spend), and
+pagination past the 100 most recent transactions a filter matches.
 
 In progress: [scheduled transactions and a dashboard](docs/specs/001-scheduled-transactions-and-dashboard.md),
 specified before the backend and frontend teams build them in parallel.
