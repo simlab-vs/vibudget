@@ -8,9 +8,11 @@ interface Props {
 const { title } = Astro.props;
 
 const sections = [
+  { href: "/dashboard", label: "Dashboard" },
   { href: "/", label: "Budget" },
   { href: "/accounts", label: "Accounts" },
   { href: "/transactions", label: "Transactions" },
+  { href: "/scheduled", label: "Scheduled" },
   { href: "/payees", label: "Payees" },
 ];
 ---

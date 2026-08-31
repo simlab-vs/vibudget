@@ -1,4 +1,4 @@
-import type { IsoDate } from "@/lib/types";
+import type { Frequency, IsoDate } from "@/lib/types";
 
 /** Today in the viewer's own timezone, as the API's calendar dates are naive. */
 export function today(): IsoDate {
@@ -36,4 +36,46 @@ export function formatMonth(month: string, locale = "en-US"): string {
 export function amountTone(amount: number): string {
   if (amount === 0) return "";
   return amount < 0 ? "negative" : "positive";
+}
+
+function ordinal(day: number): string {
+  if (day % 100 >= 11 && day % 100 <= 13) return `${day}th`;
+  const suffixes: Record<number, string> = { 1: "st", 2: "nd", 3: "rd" };
+  return `${day}${suffixes[day % 10] ?? "th"}`;
+}
+
+/**
+ * A schedule's recurrence as one readable phrase: "daily", "every 2 weeks on
+ * Friday", "monthly on the 15th". The scheduled screen and the dashboard both
+ * use this, so the wording never diverges between them.
+ */
+export function describe(
+  schedule: { frequency: Frequency; interval: number; anchor_date: IsoDate },
+  locale = "en-US",
+): string {
+  const anchor = new Date(`${schedule.anchor_date}T00:00:00`);
+  const every = schedule.interval;
+  switch (schedule.frequency) {
+    case "daily":
+      return every === 1 ? "daily" : `every ${every} days`;
+    case "weekly": {
+      const weekday = anchor.toLocaleDateString(locale, { weekday: "long" });
+      return every === 1 ? `weekly on ${weekday}` : `every ${every} weeks on ${weekday}`;
+    }
+    case "monthly": {
+      const day = ordinal(anchor.getDate());
+      return every === 1 ? `monthly on the ${day}` : `every ${every} months on the ${day}`;
+    }
+    case "yearly": {
+      const day = anchor.toLocaleDateString(locale, { month: "short", day: "numeric" });
+      return every === 1 ? `yearly on ${day}` : `every ${every} years on ${day}`;
+    }
+  }
+}
+
+/** The Monday of the week holding `date`, for grouping upcoming occurrences. */
+export function weekStart(date: IsoDate): IsoDate {
+  const day = new Date(`${date}T00:00:00Z`);
+  day.setUTCDate(day.getUTCDate() - ((day.getUTCDay() + 6) % 7));
+  return day.toISOString().slice(0, 10);
 }

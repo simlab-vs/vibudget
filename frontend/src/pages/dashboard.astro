@@ -1,0 +1,461 @@
+---
+import Base from "@/layouts/Base.astro";
+---
+
+<Base title="Dashboard">
+  <div class="toolbar">
+    <label>
+      Month
+      <input type="month" id="month" />
+    </label>
+    <span class="muted">Activity only — ViBudget has no budgeted amounts yet.</span>
+  </div>
+
+  <section class="panel">
+    <h2>Net worth</h2>
+    <div class="stats">
+      <div class="stat">
+        <span class="label">On budget</span>
+        <span class="value" id="worth-on">—</span>
+      </div>
+      <div class="stat">
+        <span class="label">Off budget</span>
+        <span class="value" id="worth-off">—</span>
+      </div>
+      <div class="stat">
+        <span class="label">Total</span>
+        <span class="value" id="worth-total">—</span>
+      </div>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Account</th>
+            <th>Type</th>
+            <th class="numeric">Balance</th>
+          </tr>
+        </thead>
+        <tbody id="account-rows">
+          <tr class="empty"><td colspan="3">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Cashflow</h2>
+    <div class="card chart">
+      <div class="legend">
+        <span><i class="swatch" style="background: var(--gain)"></i> Inflow</span>
+        <span><i class="swatch" style="background: var(--loss)"></i> Outflow</span>
+        <span><i class="swatch" style="background: var(--ink)"></i> Net</span>
+      </div>
+      <div id="cashflow-plot"><p class="muted">Loading…</p></div>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Month</th>
+            <th class="numeric">Inflow</th>
+            <th class="numeric">Outflow</th>
+            <th class="numeric">Net</th>
+          </tr>
+        </thead>
+        <tbody id="cashflow-rows">
+          <tr class="empty"><td colspan="4">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="hint">On-budget accounts only.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Spending by category</h2>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Category</th>
+            <th class="numeric" id="spending-this">This month</th>
+            <th class="numeric" id="spending-previous">Previous month</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="spending-rows">
+          <tr class="empty"><td colspan="4">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="hint">Outflows on on-budget accounts, by category.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Upcoming and unapproved</h2>
+    <p id="due-summary">Loading…</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Payee</th>
+            <th>Category</th>
+            <th class="numeric">Amount</th>
+          </tr>
+        </thead>
+        <tbody id="upcoming-rows">
+          <tr class="empty"><td colspan="4">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="hint" id="uncleared"></p>
+  </section>
+
+  <script>
+    import { api } from "@/lib/api";
+    import { attempt, el, element, replace, resetStatus, row } from "@/lib/dom";
+    import { amountTone, currentMonth, formatDate, formatMonth, monthBounds } from "@/lib/format";
+    import { formatMilliunits } from "@/lib/types";
+    import type { CashflowMonth, Dashboard, ScheduledOccurrence, SpendingGroup } from "@/lib/types";
+
+    const MONTHS = 6;
+
+    const month = element<HTMLInputElement>("#month");
+    const accountRows = element<HTMLTableSectionElement>("#account-rows");
+    const cashflowPlot = element("#cashflow-plot");
+    const cashflowRows = element<HTMLTableSectionElement>("#cashflow-rows");
+    const spendingRows = element<HTMLTableSectionElement>("#spending-rows");
+    const upcomingRows = element<HTMLTableSectionElement>("#upcoming-rows");
+    const dueSummary = element("#due-summary");
+    const uncleared = element("#uncleared");
+
+    const payeeNames = new Map<string, string>();
+    const categoryNames = new Map<string, string>();
+
+    async function loadLookups(): Promise<void> {
+      const data = await attempt(async () => ({
+        payees: await api.payees.list(),
+        groups: await api.categories.list({ include_hidden: true }),
+      }));
+      if (!data) return;
+      for (const payee of data.payees) payeeNames.set(payee.id, payee.name);
+      for (const group of data.groups) {
+        for (const child of group.children) categoryNames.set(child.id, child.name);
+      }
+    }
+
+    function previousMonth(current: string): string {
+      const [year, index] = current.split("-").map(Number);
+      return new Date(Date.UTC(year, index - 2, 1)).toISOString().slice(0, 7);
+    }
+
+    async function load(): Promise<void> {
+      const dashboard = await attempt(() => api.dashboard.get({ month: month.value, months: MONTHS }));
+      if (!dashboard) {
+        const failed = "Could not load.";
+        replace(accountRows, row(3, failed));
+        replace(cashflowPlot, el("p", { class: "muted" }, failed));
+        replace(cashflowRows, row(4, failed));
+        replace(spendingRows, row(4, failed));
+        replace(upcomingRows, row(4, failed));
+        dueSummary.textContent = "";
+        uncleared.textContent = "";
+        return;
+      }
+
+      renderWorth(dashboard);
+      renderCashflow(dashboard.cashflow);
+      renderSpending(dashboard);
+      renderUpcoming(dashboard);
+    }
+
+    function renderWorth(dashboard: Dashboard): void {
+      for (const [selector, amount] of [
+        ["#worth-on", dashboard.net_worth.on_budget],
+        ["#worth-off", dashboard.net_worth.off_budget],
+        ["#worth-total", dashboard.net_worth.total],
+      ] as const) {
+        const value = element(selector);
+        value.textContent = formatMilliunits(amount);
+        value.className = `value amount ${amountTone(amount)}`;
+      }
+
+      replace(
+        accountRows,
+        ...(dashboard.accounts.length
+          ? dashboard.accounts.map((account) =>
+              el(
+                "tr",
+                {},
+                el(
+                  "td",
+                  {},
+                  el(
+                    "a",
+                    { class: "inline", href: `/transactions?account_id=${account.id}` },
+                    account.name,
+                  ),
+                  account.closed ? " " : null,
+                  account.closed ? el("span", { class: "pill" }, "closed") : null,
+                  account.on_budget ? null : " ",
+                  account.on_budget ? null : el("span", { class: "pill" }, "off budget"),
+                ),
+                el("td", { class: "muted" }, account.type),
+                el(
+                  "td",
+                  { class: `numeric amount ${amountTone(account.balance)}` },
+                  formatMilliunits(account.balance),
+                ),
+              ),
+            )
+          : [row(3, "No account yet.")]),
+      );
+    }
+
+    // The cashflow chart is hand-built SVG: the repo rule is nothing beyond Astro.
+    const SVG_NS = "http://www.w3.org/2000/svg";
+    function svg<K extends keyof SVGElementTagNameMap>(
+      tag: K,
+      attributes: Record<string, string | number> = {},
+      ...children: (SVGElement | string)[]
+    ): SVGElementTagNameMap[K] {
+      const node = document.createElementNS(SVG_NS, tag);
+      for (const [name, value] of Object.entries(attributes)) {
+        node.setAttribute(name, String(value));
+      }
+      node.append(...children);
+      return node;
+    }
+
+    /** A bar from the zero line, only its outer corners rounded. */
+    function barPath(x: number, width: number, zero: number, height: number, up: boolean): string {
+      const r = Math.min(3, width / 2, height);
+      const end = up ? zero - height : zero + height;
+      const edge = up ? end + r : end - r;
+      return (
+        `M ${x} ${zero} L ${x} ${edge} Q ${x} ${end} ${x + r} ${end} ` +
+        `L ${x + width - r} ${end} Q ${x + width} ${end} ${x + width} ${edge} ` +
+        `L ${x + width} ${zero} Z`
+      );
+    }
+
+    function renderCashflow(cashflow: CashflowMonth[]): void {
+      replace(
+        cashflowRows,
+        ...(cashflow.length
+          ? cashflow.map((bucket) =>
+              el(
+                "tr",
+                {},
+                el("td", {}, formatMonth(bucket.month)),
+                el("td", { class: "numeric" }, formatMilliunits(bucket.inflow)),
+                el("td", { class: "numeric" }, formatMilliunits(bucket.outflow)),
+                el(
+                  "td",
+                  { class: `numeric amount ${amountTone(bucket.net)}` },
+                  formatMilliunits(bucket.net),
+                ),
+              ),
+            )
+          : [row(4, "No months in range.")]),
+      );
+
+      const maxUp = Math.max(...cashflow.map((bucket) => bucket.inflow), 0);
+      const maxDown = Math.max(...cashflow.map((bucket) => -bucket.outflow), 0);
+      if (!cashflow.length || maxUp + maxDown === 0) {
+        replace(cashflowPlot, el("p", { class: "muted" }, "No activity in this range."));
+        return;
+      }
+
+      const width = 640;
+      const height = 240;
+      const pad = { top: 12, right: 12, bottom: 26, left: 12 };
+      const plotHeight = height - pad.top - pad.bottom;
+      const scale = plotHeight / (maxUp + maxDown);
+      const zero = pad.top + maxUp * scale;
+      const slot = (width - pad.left - pad.right) / cashflow.length;
+      const barWidth = Math.min(28, slot * 0.5);
+
+      const chart = svg("svg", {
+        viewBox: `0 0 ${width} ${height}`,
+        role: "img",
+        "aria-label": `Monthly cashflow for the last ${cashflow.length} months; exact figures in the table below`,
+      });
+      chart.append(
+        svg("line", { class: "zero", x1: pad.left, x2: width - pad.right, y1: zero, y2: zero }),
+      );
+
+      cashflow.forEach((bucket, index) => {
+        const x = pad.left + slot * index + (slot - barWidth) / 2;
+        const group = svg("g", {});
+        group.append(
+          svg(
+            "title",
+            {},
+            `${formatMonth(bucket.month)}\nIn ${formatMilliunits(bucket.inflow)}\n` +
+              `Out ${formatMilliunits(bucket.outflow)}\nNet ${formatMilliunits(bucket.net)}`,
+          ),
+        );
+        // A 2px surface gap keeps the two fills apart at the shared baseline.
+        if (bucket.inflow > 0) {
+          group.append(
+            svg("path", {
+              class: "inflow",
+              d: barPath(x, barWidth, zero - 1, bucket.inflow * scale, true),
+            }),
+          );
+        }
+        if (bucket.outflow < 0) {
+          group.append(
+            svg("path", {
+              class: "outflow",
+              d: barPath(x, barWidth, zero + 1, -bucket.outflow * scale, false),
+            }),
+          );
+        }
+        group.append(
+          svg("rect", {
+            class: "net",
+            x: x - 2,
+            y: zero - bucket.net * scale - 1,
+            width: barWidth + 4,
+            height: 2,
+          }),
+        );
+
+        const first = index === 0;
+        const date = new Date(`${bucket.month}-01T00:00:00`);
+        const label = date.toLocaleDateString(
+          "en-US",
+          first || date.getMonth() === 0
+            ? { month: "short", year: "2-digit" }
+            : { month: "short" },
+        );
+        group.append(
+          svg("text", { x: x + barWidth / 2, y: height - 8, "text-anchor": "middle" }, label),
+        );
+        chart.append(group);
+      });
+
+      replace(cashflowPlot, chart);
+    }
+
+    function renderSpending(dashboard: Dashboard): void {
+      element("#spending-this").textContent = formatMonth(dashboard.month);
+      element("#spending-previous").textContent = formatMonth(previousMonth(dashboard.month));
+
+      const { since, until } = monthBounds(dashboard.month);
+      // Spending arrives signed and negative; only the display shows the magnitude.
+      const spent = (amount: number) => (amount ? formatMilliunits(Math.abs(amount)) : "—");
+
+      const body = dashboard.spending.flatMap((group: SpendingGroup) => [
+        el(
+          "tr",
+          { class: "group-row" },
+          el("td", {}, group.group_name),
+          el("td", { class: "numeric" }, spent(group.amount)),
+          el("td", { class: "numeric muted" }, spent(group.previous_amount)),
+          el("td", {}),
+        ),
+        ...group.categories.map((category) =>
+          el(
+            "tr",
+            {},
+            el("td", { class: "child-name" }, category.name),
+            el("td", { class: "numeric" }, spent(category.amount)),
+            el("td", { class: "numeric muted" }, spent(category.previous_amount)),
+            el(
+              "td",
+              {},
+              el(
+                "div",
+                { class: "actions" },
+                el(
+                  "a",
+                  {
+                    class: "inline",
+                    href: `/transactions?category_id=${category.id}&since=${since}&until=${until}`,
+                  },
+                  "Transactions",
+                ),
+              ),
+            ),
+          ),
+        ),
+      ]);
+      replace(spendingRows, ...(body.length ? body : [row(4, "No spending in either month.")]));
+    }
+
+    function renderUpcoming(dashboard: Dashboard): void {
+      const { due_count, due_total, next_7_days } = dashboard.upcoming;
+      replace(
+        dueSummary,
+        due_count
+          ? el(
+              "span",
+              {},
+              `${due_count} occurrence${due_count === 1 ? "" : "s"} waiting for approval, ` +
+                `totalling ${formatMilliunits(due_total)} — `,
+              el("a", { class: "inline", href: "/scheduled" }, "review in Scheduled"),
+            )
+          : el(
+              "span",
+              { class: "muted" },
+              "Nothing waiting for approval — ",
+              el("a", { class: "inline", href: "/scheduled" }, "manage schedules"),
+            ),
+      );
+
+      replace(
+        upcomingRows,
+        ...(next_7_days.length
+          ? next_7_days.map((occurrence: ScheduledOccurrence) =>
+              el(
+                "tr",
+                {},
+                el("td", {}, formatDate(occurrence.due_date)),
+                el(
+                  "td",
+                  {},
+                  occurrence.payee_id ? (payeeNames.get(occurrence.payee_id) ?? "—") : "—",
+                ),
+                el(
+                  "td",
+                  {},
+                  occurrence.splits.length === 1
+                    ? (categoryNames.get(occurrence.splits[0].category_id) ?? "—")
+                    : el("span", { class: "pill" }, `split × ${occurrence.splits.length}`),
+                ),
+                el(
+                  "td",
+                  { class: `numeric amount ${amountTone(occurrence.amount)}` },
+                  formatMilliunits(occurrence.amount),
+                ),
+              ),
+            )
+          : [row(4, "Nothing due in the next 7 days.")]),
+      );
+
+      replace(
+        uncleared,
+        el(
+          "a",
+          { class: "inline", href: "/transactions" },
+          `${dashboard.uncleared_count} uncleared transaction${
+            dashboard.uncleared_count === 1 ? "" : "s"
+          }`,
+        ),
+        " on on-budget accounts.",
+      );
+    }
+
+    month.addEventListener("change", () => {
+      resetStatus();
+      void load();
+    });
+
+    month.value = currentMonth();
+    void loadLookups().then(load);
+  </script>
+</Base>

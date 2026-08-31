@@ -6,9 +6,16 @@ import type {
   CategoryCreate,
   CategoryGroup,
   CategoryUpdate,
+  Dashboard,
+  OccurrenceApproval,
+  OccurrenceQuery,
   Payee,
   PayeeCreate,
   PayeeUpdate,
+  Schedule,
+  ScheduleCreate,
+  ScheduledOccurrence,
+  ScheduleUpdate,
   Transaction,
   TransactionCreate,
   TransactionQuery,
@@ -115,5 +122,24 @@ export const api = {
     update: (id: UUID, payload: TransactionUpdate) =>
       request<Transaction>(`/transactions/${id}`, send("PATCH", payload)),
     remove: (id: UUID) => request<void>(`/transactions/${id}`, { method: "DELETE" }),
+  },
+  schedules: {
+    list: (options: { include_paused?: boolean } = {}) =>
+      request<Schedule[]>(`/schedules${query(options)}`),
+    get: (id: UUID) => request<Schedule>(`/schedules/${id}`),
+    create: (payload: ScheduleCreate) => request<Schedule>("/schedules", send("POST", payload)),
+    update: (id: UUID, payload: ScheduleUpdate) =>
+      request<Schedule>(`/schedules/${id}`, send("PATCH", payload)),
+    remove: (id: UUID) => request<void>(`/schedules/${id}`, { method: "DELETE" }),
+    occurrences: (options: OccurrenceQuery = {}) =>
+      request<ScheduledOccurrence[]>(`/schedules/occurrences${query(options)}`),
+    approve: (id: UUID, payload: OccurrenceApproval = {}) =>
+      request<Transaction>(`/schedules/occurrences/${id}/approve`, send("POST", payload)),
+    skip: (id: UUID) =>
+      request<ScheduledOccurrence>(`/schedules/occurrences/${id}/skip`, { method: "POST" }),
+  },
+  dashboard: {
+    get: (options: { month?: string; months?: number } = {}) =>
+      request<Dashboard>(`/dashboard${query(options)}`),
   },
 };

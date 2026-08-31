@@ -274,6 +274,20 @@ tfoot td {
   padding: 0.1rem 0.5rem;
 }
 
+a.pill {
+  text-decoration: none;
+}
+
+a.pill:hover {
+  color: var(--ink);
+  border-color: var(--muted);
+}
+
+.pill.warn {
+  color: var(--loss);
+  border-color: #e3c3bf;
+}
+
 .empty td {
   color: var(--muted);
   padding: 1.5rem 0.7rem;
@@ -302,4 +316,87 @@ a.inline {
 
 a.inline:hover {
   text-decoration: underline;
+}
+
+.panel {
+  margin-bottom: 2.25rem;
+}
+
+.panel > .table-scroll {
+  margin-bottom: 0.5rem;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.stat {
+  display: grid;
+  gap: 0.15rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.8rem;
+}
+
+.stat .label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.stat .value {
+  font-size: 1.2rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}
+
+.legend .swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  vertical-align: baseline;
+}
+
+.chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.chart .zero {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.chart .inflow {
+  fill: var(--gain);
+}
+
+.chart .outflow {
+  fill: var(--loss);
+}
+
+.chart .net {
+  fill: var(--ink);
+}
+
+.chart text {
+  fill: var(--muted);
+  font-size: 11px;
 }

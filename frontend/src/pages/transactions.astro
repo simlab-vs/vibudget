@@ -284,6 +284,14 @@ import Base from "@/layouts/Base.astro";
           transaction.payee_id
             ? (payeeNames.get(transaction.payee_id) ?? "—")
             : el("span", { class: "muted" }, "—"),
+          transaction.scheduled_occurrence_id ? " " : null,
+          transaction.scheduled_occurrence_id
+            ? el(
+                "a",
+                { class: "pill", href: "/scheduled", title: "Entered by approving a schedule" },
+                "scheduled",
+              )
+            : null,
         ),
         categoryCell(transaction),
         el("td", { class: "muted" }, transaction.memo ?? ""),

@@ -1,0 +1,551 @@
+---
+import Base from "@/layouts/Base.astro";
+---
+
+<Base title="Scheduled">
+  <section class="panel">
+    <h2>Due now</h2>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Account</th>
+            <th>Payee</th>
+            <th>Category</th>
+            <th>Memo</th>
+            <th class="numeric">Amount</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="due-rows">
+          <tr class="empty"><td colspan="7">Loading…</td></tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="5" id="due-count"></td>
+            <td class="numeric" id="due-total"></td>
+            <td></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+    <p class="hint">
+      Approve enters the transaction at the amount shown — edit the amount first for a variable
+      bill. Skipping cannot be undone.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>Upcoming</h2>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Payee</th>
+            <th>Category</th>
+            <th class="numeric">Amount</th>
+            <th class="numeric">Running total</th>
+          </tr>
+        </thead>
+        <tbody id="upcoming-rows">
+          <tr class="empty"><td colspan="5">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Schedules</h2>
+    <form class="card" id="new-schedule">
+      <h2>Add a schedule</h2>
+      <div class="fields">
+        <label class="field">
+          Account
+          <select name="account_id" id="new-account" required></select>
+        </label>
+        <label class="field">
+          Payee
+          <select name="payee_id" id="new-payee"></select>
+        </label>
+        <label class="field">
+          Category
+          <select name="category_id" id="new-category" required></select>
+        </label>
+        <label class="field">
+          Direction
+          <select name="direction">
+            <option value="outflow">Outflow</option>
+            <option value="inflow">Inflow</option>
+          </select>
+        </label>
+        <label class="field">
+          Amount
+          <input type="number" name="amount" min="0" step="0.01" placeholder="0.00" required />
+        </label>
+        <label class="field">
+          Frequency
+          <select name="frequency">
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly" selected>Monthly</option>
+            <option value="yearly">Yearly</option>
+          </select>
+        </label>
+        <label class="field">
+          Every
+          <input type="number" name="interval" min="1" max="366" step="1" value="1" required />
+        </label>
+        <label class="field">
+          First date
+          <input type="date" name="anchor_date" id="new-anchor" required />
+        </label>
+        <label class="field">
+          Ends on
+          <input type="date" name="ends_on" />
+        </label>
+        <label class="field wide">
+          Memo
+          <input name="memo" maxlength="500" placeholder="Optional" />
+        </label>
+        <div class="field">
+          <button class="primary" type="submit">Add schedule</button>
+        </div>
+      </div>
+      <p class="hint">
+        The first date sets the rule's day: its weekday for weekly, its day of the month for
+        monthly. One category per schedule here; a schedule split across several categories is
+        created through the API.
+      </p>
+    </form>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Payee</th>
+            <th>Account</th>
+            <th>Category</th>
+            <th class="numeric">Amount</th>
+            <th>Rule</th>
+            <th>Next due</th>
+            <th>Ends</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="schedule-rows">
+          <tr class="empty"><td colspan="8">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <script>
+    import { api } from "@/lib/api";
+    import { attempt, el, element, fields, fillSelect, replace, resetStatus, row } from "@/lib/dom";
+    import type { Option } from "@/lib/dom";
+    import { amountTone, describe, formatDate, today, weekStart } from "@/lib/format";
+    import { MILLIUNITS_PER_UNIT, formatMilliunits, toMilliunits } from "@/lib/types";
+    import type {
+      Frequency,
+      OccurrenceApproval,
+      Schedule,
+      ScheduledOccurrence,
+    } from "@/lib/types";
+
+    const form = element<HTMLFormElement>("#new-schedule");
+    const dueRows = element<HTMLTableSectionElement>("#due-rows");
+    const dueCount = element("#due-count");
+    const dueTotal = element("#due-total");
+    const upcomingRows = element<HTMLTableSectionElement>("#upcoming-rows");
+    const scheduleRows = element<HTMLTableSectionElement>("#schedule-rows");
+
+    const accountNames = new Map<string, string>();
+    const payeeNames = new Map<string, string>();
+    const categoryNames = new Map<string, string>();
+    let categoryOptions: Option[] = [];
+    let payeeOptions: Option[] = [];
+
+    /** Signed milliunits → a magnitude for a number input, e.g. -1200000 → "1200.00". */
+    const magnitude = (amount: number) => (Math.abs(amount) / MILLIUNITS_PER_UNIT).toFixed(2);
+
+    const payeeLabel = (payeeId: string | null) =>
+      payeeId ? (payeeNames.get(payeeId) ?? "—") : "—";
+
+    async function loadLookups(): Promise<void> {
+      const data = await attempt(async () => ({
+        accounts: await api.accounts.list({ include_closed: true }),
+        payees: await api.payees.list(),
+        groups: await api.categories.list({ include_hidden: true }),
+      }));
+      if (!data) return;
+
+      accountNames.clear();
+      payeeNames.clear();
+      categoryNames.clear();
+      for (const account of data.accounts) accountNames.set(account.id, account.name);
+      for (const payee of data.payees) payeeNames.set(payee.id, payee.name);
+      categoryOptions = data.groups.flatMap((group) =>
+        group.children.map((child) => {
+          categoryNames.set(child.id, child.name);
+          return { value: child.id, label: child.name, group: group.name };
+        }),
+      );
+      payeeOptions = data.payees.map((payee) => ({ value: payee.id, label: payee.name }));
+
+      const open = data.accounts
+        .filter((account) => !account.closed)
+        .map((account) => ({ value: account.id, label: account.name }));
+      fillSelect(element<HTMLSelectElement>("#new-account"), open, "Choose one");
+      fillSelect(element<HTMLSelectElement>("#new-payee"), payeeOptions, "No payee");
+      fillSelect(element<HTMLSelectElement>("#new-category"), categoryOptions, "Choose one");
+    }
+
+    async function load(): Promise<void> {
+      const data = await attempt(async () => ({
+        occurrences: await api.schedules.occurrences(),
+        schedules: await api.schedules.list({ include_paused: true }),
+      }));
+      if (!data) {
+        replace(dueRows, row(7, "Could not load."));
+        replace(upcomingRows, row(5, "Could not load."));
+        replace(scheduleRows, row(8, "Could not load."));
+        return;
+      }
+
+      const cutoff = today();
+      const due = data.occurrences.filter(
+        (occurrence) => occurrence.overdue || occurrence.due_date <= cutoff,
+      );
+      const upcoming = data.occurrences.filter((occurrence) => !due.includes(occurrence));
+
+      renderDue(due);
+      renderUpcoming(upcoming);
+      renderSchedules(data.schedules);
+    }
+
+    function renderDue(due: ScheduledOccurrence[]): void {
+      replace(dueRows, ...(due.length ? due.map(dueRow) : [row(7, "Nothing waiting on you.")]));
+      dueCount.textContent = due.length
+        ? `${due.length} occurrence${due.length === 1 ? "" : "s"} waiting`
+        : "";
+      dueTotal.textContent = due.length
+        ? formatMilliunits(due.reduce((sum, occurrence) => sum + occurrence.amount, 0))
+        : "";
+    }
+
+    function categoryCell(occurrence: ScheduledOccurrence): HTMLTableCellElement {
+      if (occurrence.splits.length !== 1) {
+        const detail = occurrence.splits
+          .map(
+            (split) =>
+              `${categoryNames.get(split.category_id) ?? "?"} ${formatMilliunits(split.amount)}`,
+          )
+          .join("\n");
+        return el(
+          "td",
+          { title: detail },
+          el("span", { class: "pill" }, `split × ${occurrence.splits.length}`),
+        );
+      }
+      return el("td", {}, categoryNames.get(occurrence.splits[0].category_id) ?? "—");
+    }
+
+    function dueRow(occurrence: ScheduledOccurrence): HTMLTableRowElement {
+      // Overriding the amount on a split occurrence is refused by the API, so
+      // the input only appears for the single-category case, like the register.
+      const editable = occurrence.splits.length === 1;
+      const amountInput = editable
+        ? el("input", {
+            class: "cell-input numeric",
+            type: "number",
+            min: "0",
+            step: "0.01",
+            value: magnitude(occurrence.amount),
+            "aria-label": "Amount to approve",
+          })
+        : null;
+
+      return el(
+        "tr",
+        {},
+        el(
+          "td",
+          {},
+          formatDate(occurrence.due_date),
+          occurrence.overdue ? " " : null,
+          occurrence.overdue ? el("span", { class: "pill warn" }, "overdue") : null,
+        ),
+        el("td", {}, accountNames.get(occurrence.account_id) ?? "—"),
+        el("td", {}, payeeLabel(occurrence.payee_id)),
+        categoryCell(occurrence),
+        el("td", { class: "muted" }, occurrence.memo ?? ""),
+        amountInput
+          ? el("td", { class: "numeric" }, amountInput)
+          : el(
+              "td",
+              { class: `numeric amount ${amountTone(occurrence.amount)}` },
+              formatMilliunits(occurrence.amount),
+            ),
+        el(
+          "td",
+          {},
+          el(
+            "div",
+            { class: "actions" },
+            el(
+              "button",
+              { type: "button", onclick: () => void approve(occurrence, amountInput) },
+              "Approve",
+            ),
+            el(
+              "button",
+              { class: "link danger", type: "button", onclick: () => void skip(occurrence) },
+              "Skip",
+            ),
+          ),
+        ),
+      );
+    }
+
+    async function approve(
+      occurrence: ScheduledOccurrence,
+      amountInput: HTMLInputElement | null,
+    ): Promise<void> {
+      resetStatus();
+      const payload: OccurrenceApproval = {};
+      if (amountInput) {
+        const sign = occurrence.amount < 0 ? -1 : 1;
+        const amount = sign * toMilliunits(Number(amountInput.value));
+        if (amount !== occurrence.amount) {
+          const split = occurrence.splits[0];
+          payload.amount = amount;
+          payload.splits = [{ category_id: split.category_id, amount, memo: split.memo }];
+        }
+      }
+      await attempt(() => api.schedules.approve(occurrence.id, payload));
+      await load();
+    }
+
+    async function skip(occurrence: ScheduledOccurrence): Promise<void> {
+      const label = `${payeeLabel(occurrence.payee_id)} on ${formatDate(occurrence.due_date)}`;
+      if (!window.confirm(`Skip ${label}? Skipping cannot be undone.`)) return;
+      resetStatus();
+      await attempt(() => api.schedules.skip(occurrence.id));
+      await load();
+    }
+
+    function renderUpcoming(upcoming: ScheduledOccurrence[]): void {
+      if (!upcoming.length) {
+        replace(upcomingRows, row(5, "Nothing coming up before the horizon."));
+        return;
+      }
+
+      const body: HTMLTableRowElement[] = [];
+      let running = 0;
+      let week = "";
+      for (const occurrence of upcoming) {
+        const start = weekStart(occurrence.due_date);
+        if (start !== week) {
+          week = start;
+          body.push(
+            el(
+              "tr",
+              { class: "group-row" },
+              el("td", { colspan: 5 }, `Week of ${formatDate(start)}`),
+            ),
+          );
+        }
+        running += occurrence.amount;
+        body.push(
+          el(
+            "tr",
+            {},
+            el("td", {}, formatDate(occurrence.due_date)),
+            el("td", {}, payeeLabel(occurrence.payee_id)),
+            categoryCell(occurrence),
+            el(
+              "td",
+              { class: `numeric amount ${amountTone(occurrence.amount)}` },
+              formatMilliunits(occurrence.amount),
+            ),
+            el("td", { class: "numeric muted" }, formatMilliunits(running)),
+          ),
+        );
+      }
+      replace(upcomingRows, ...body);
+    }
+
+    function renderSchedules(schedules: Schedule[]): void {
+      replace(
+        scheduleRows,
+        ...(schedules.length ? schedules.map(scheduleRow) : [row(8, "No schedule yet.")]),
+      );
+    }
+
+    function scheduleRow(schedule: Schedule): HTMLTableRowElement {
+      const single = schedule.splits.length === 1;
+
+      const payee = el("select", {
+        "aria-label": "Payee",
+        onchange: (event: Event) =>
+          void patch(schedule.id, {
+            payee_id: (event.target as HTMLSelectElement).value || null,
+          }),
+      });
+      fillSelect(payee, payeeOptions, "No payee");
+      payee.value = schedule.payee_id ?? "";
+
+      let category: HTMLTableCellElement;
+      if (single) {
+        const split = schedule.splits[0];
+        const select = el("select", {
+          "aria-label": "Category",
+          onchange: (event: Event) =>
+            void patch(schedule.id, {
+              amount: schedule.amount,
+              splits: [
+                {
+                  category_id: (event.target as HTMLSelectElement).value,
+                  amount: schedule.amount,
+                  memo: split.memo,
+                },
+              ],
+            }),
+        });
+        fillSelect(select, categoryOptions);
+        select.value = split.category_id;
+        category = el("td", {}, select);
+      } else {
+        const detail = schedule.splits
+          .map(
+            (split) =>
+              `${categoryNames.get(split.category_id) ?? "?"} ${formatMilliunits(split.amount)}`,
+          )
+          .join("\n");
+        category = el(
+          "td",
+          { title: detail },
+          el("span", { class: "pill" }, `split × ${schedule.splits.length}`),
+        );
+      }
+
+      const amount = single
+        ? el("td", { class: "numeric" },
+            el("input", {
+              class: "cell-input numeric",
+              type: "number",
+              min: "0",
+              step: "0.01",
+              value: magnitude(schedule.amount),
+              "aria-label": "Template amount",
+              onchange: (event: Event) => {
+                const sign = schedule.amount < 0 ? -1 : 1;
+                void patch(schedule.id, {
+                  amount: sign * toMilliunits(Number((event.target as HTMLInputElement).value)),
+                });
+              },
+            }),
+          )
+        : el(
+            "td",
+            { class: `numeric amount ${amountTone(schedule.amount)}` },
+            formatMilliunits(schedule.amount),
+          );
+
+      return el(
+        "tr",
+        {},
+        el("td", {}, payee),
+        el("td", {}, accountNames.get(schedule.account_id) ?? "—"),
+        category,
+        amount,
+        el(
+          "td",
+          {},
+          describe(schedule),
+          schedule.paused ? " " : null,
+          schedule.paused ? el("span", { class: "pill" }, "paused") : null,
+        ),
+        el("td", {}, formatDate(schedule.next_due)),
+        el("td", { class: "muted" }, schedule.ends_on ? formatDate(schedule.ends_on) : "—"),
+        el(
+          "td",
+          {},
+          el(
+            "div",
+            { class: "actions" },
+            el(
+              "button",
+              {
+                class: "link",
+                type: "button",
+                onclick: () => void patch(schedule.id, { paused: !schedule.paused }),
+              },
+              schedule.paused ? "Resume" : "Pause",
+            ),
+            el(
+              "button",
+              { class: "link danger", type: "button", onclick: () => void remove(schedule) },
+              "Delete",
+            ),
+          ),
+        ),
+      );
+    }
+
+    async function patch(
+      id: string,
+      payload: Parameters<typeof api.schedules.update>[1],
+    ): Promise<void> {
+      resetStatus();
+      await attempt(() => api.schedules.update(id, payload));
+      await load();
+    }
+
+    async function remove(schedule: Schedule): Promise<void> {
+      const label = `the ${describe(schedule)} schedule for ${payeeLabel(schedule.payee_id)}`;
+      if (
+        !window.confirm(
+          `Delete ${label}? Its pending occurrences go with it; transactions already approved stay.`,
+        )
+      ) {
+        return;
+      }
+      resetStatus();
+      await attempt(() => api.schedules.remove(schedule.id));
+      await load();
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      resetStatus();
+      const field = fields(form);
+      const sign = field("direction") === "inflow" ? 1 : -1;
+      const amount = sign * toMilliunits(Number(field("amount")));
+
+      const created = await attempt(() =>
+        api.schedules.create({
+          account_id: field("account_id"),
+          payee_id: field("payee_id") || null,
+          amount,
+          memo: field("memo") || null,
+          frequency: field("frequency") as Frequency,
+          interval: Number(field("interval") || "1"),
+          anchor_date: field("anchor_date"),
+          ends_on: field("ends_on") || null,
+          splits: [{ category_id: field("category_id"), amount }],
+        }),
+      );
+
+      if (created) {
+        form.reset();
+        element<HTMLInputElement>("#new-anchor").value = today();
+      }
+      await load();
+    });
+
+    element<HTMLInputElement>("#new-anchor").value = today();
+    void loadLookups().then(load);
+  </script>
+</Base>
