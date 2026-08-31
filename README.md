@@ -36,6 +36,7 @@ frontend/
   src/pages/          One screen per route
   src/styles/app.css  The whole stylesheet
   nginx.conf          Serves the static build, proxies /api to the backend
+docs/specs/           Feature specs agreed between the teams before building
 compose.yaml          db + backend + frontend, built as images
 compose.dev.yaml      Overlay: bind-mounted sources, both servers reloading
 ```
@@ -247,6 +248,9 @@ Not built yet: editing a split transaction in the browser, assigning money to
 categories (the backend has no budgeted amount, so the budget screen reports
 activity rather than what is left to spend), and pagination past the 100 most
 recent transactions a filter matches.
+
+In progress: [scheduled transactions and a dashboard](docs/specs/001-scheduled-transactions-and-dashboard.md),
+specified before the backend and frontend teams build them in parallel.
 
 | Entity         | Endpoints                                                    |
 | -------------- | ------------------------------------------------------------ |
