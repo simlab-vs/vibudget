@@ -1,6 +1,6 @@
 # Spec 001 — Scheduled transactions and dashboard
 
-**Status:** draft, open for comment
+**Status:** approved for Phase 0 — the open questions below are decided
 **Owners:** backend team, frontend team
 **Depends on:** the schema in `backend/vibudget/migrations/001_initial.sql`
 
@@ -95,9 +95,13 @@ CREATE UNIQUE INDEX scheduled_occurrence_slot_key
     ON scheduled_occurrence (schedule_id, due_date);
 CREATE INDEX scheduled_occurrence_pending_idx
     ON scheduled_occurrence (due_date) WHERE status = 'pending';
+CREATE UNIQUE INDEX scheduled_occurrence_transaction_key
+    ON scheduled_occurrence (transaction_id) WHERE transaction_id IS NOT NULL;
 ```
 
-The unique index is what makes materialisation idempotent — see below.
+The first unique index is what makes materialisation idempotent — see below.
+The second makes "which occurrence approved this transaction" a well-defined
+question for the register badge below, rather than "the first one found".
 
 ### Materialisation
 
@@ -268,6 +272,25 @@ Three sections, top to bottom:
 `src/lib/api.ts` gains `api.schedules` with `list/get/create/update/remove` plus
 `occurrences/approve/skip`.
 
+### Marking scheduled transactions in the register
+
+Decided in [Open questions](#open-questions): a transaction written by
+approving an occurrence is marked as such in the existing register, not just
+reachable through `/scheduled`.
+
+- `Transaction` (the read shape, in `schemas/transaction.py` and its mirror in
+  `types.ts`) gains `scheduled_occurrence_id: UUID | None`. `TransactionCreate`
+  and `TransactionUpdate` are untouched — the field is read-only and never
+  arrives in a write; a transaction cannot be attached to a schedule after the
+  fact.
+- `repositories/transactions.py` sources it with a `LEFT JOIN scheduled_occurrence
+  ON scheduled_occurrence.transaction_id = transaction.id` in both
+  `list_transactions` and `get_transaction`, added to `SELECT`, not to the
+  writes. The unique index above is what makes this join return at most one row.
+- The register (`src/pages/transactions.astro`) renders a small badge next to a
+  marked row's payee, linking to `/scheduled`. No filter is added for it in
+  this phase — it is a badge, not a new query parameter.
+
 ---
 
 ## Feature 2 — Dashboard
@@ -399,6 +422,7 @@ Nothing else starts until this merges. It is the only file both teams edit.
 | `repositories/dashboard.py` — the four queries          | `/dashboard` panels and the cashflow SVG           |
 | `api/dashboard.py`                                      | `describe(schedule)` in `format.ts`               |
 | Endpoint tests against a real database                  | Empty, loading and error states for every panel    |
+| `scheduled_occurrence_id` join in `repositories/transactions.py` | Register badge for a marked transaction   |
 
 ### Ownership of shared files
 
@@ -451,19 +475,28 @@ permanently. Nothing above needs to change to accommodate them.
 
 ## Open questions
 
-Decide these before Phase 0 closes.
+Decided by both teams on 2026-08-31; Phase 0 is unblocked.
 
 1. **Should approving from the dashboard be possible**, or does the dashboard's
-   upcoming panel only link to `/scheduled`? Currently specified as link-only.
-2. **Should the register mark transactions that came from a schedule?** The join
-   exists via `scheduled_occurrence.transaction_id`; no column was added to
-   `transaction`. Deliberately left out for now.
+   upcoming panel only link to `/scheduled`? **Decided: link-only**, as
+   originally specified. The dashboard stays a read-only, composed screen;
+   approve/skip lives only in `/scheduled`.
+2. **Should the register mark transactions that came from a schedule?**
+   **Decided: yes.** See
+   [Marking scheduled transactions in the register](#marking-scheduled-transactions-in-the-register)
+   under Feature 1 — `Transaction.scheduled_occurrence_id`, a `LEFT JOIN` in
+   the transactions repository, and a badge in the register linking to
+   `/scheduled`.
 3. **Overdue horizon.** An occurrence from six months ago that was never
-   approved or skipped stays in Due-now forever. Do we auto-skip past some age,
-   or is an ever-growing queue correct?
+   approved or skipped stays in Due-now forever. **Decided: no auto-skip.**
+   The queue is unbounded by design; the user stays in control of every
+   occurrence. Revisit only if this proves a real problem in use.
 4. **Timezone.** `due_date` is compared against the server's `CURRENT_DATE`,
-   while `format.ts::today()` uses the viewer's timezone. A user just over a date
-   boundary sees a slightly different "overdue". Acceptable, or does `today` come
-   from the API?
-5. **Currency.** `formatMilliunits` hardcodes USD. Out of scope here, but the
-   dashboard puts several large totals on one screen and will make it obvious.
+   while `format.ts::today()` uses the viewer's timezone. **Decided: keep the
+   server's `CURRENT_DATE`** as the source of truth for due/overdue; no `today`
+   field is added to the API. The few hours of disagreement around midnight for
+   a traveling user is an accepted trade for not threading a clock through
+   every affected response.
+5. **Currency.** `formatMilliunits` hardcodes USD. **Decided: out of scope**
+   for this spec, exactly as proposed. It gets its own spec if and when it is
+   tackled — not folded into scheduling and the dashboard.
